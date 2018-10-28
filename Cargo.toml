@@ -1,0 +1,13 @@
+[workspace]
+members = [
+        "libraptor-sys"
+]
+
+[package]
+name = "raptor-rs"
+version = "0.1.0"
+authors = ["Phillip Lord <phillip.lord@newcastle.ac.uk>"]
+
+[dependencies]
+pkg-config = "0.3"
+libraptor-sys = {path="./libraptor-sys/"}

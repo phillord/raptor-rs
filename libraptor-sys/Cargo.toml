@@ -1,0 +1,11 @@
+[package]
+name = "libraptor-sys"
+version = "0.1.0"
+authors = ["Phillip Lord <phillip.lord@newcastle.ac.uk>"]
+
+[dependencies]
+
+
+[build-dependencies]
+bindgen = "0.42.2"
+pkg-config = "0.3"
