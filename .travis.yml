@@ -1,6 +1,7 @@
 language: rust
 install:
   - sudo apt-get install libraptor2-0
+  - dpkg -L libraptor2-0
 script:
   - cargo build --all
   - cargo test --all
