@@ -68,7 +68,8 @@ mod tests {
                                                 0);
 
             assert_eq!(rtn, 0);
-
+            raptor_free_uri(raptor_base_uri);
+            raptor_free_parser(rdf_parser);
             raptor_free_world(world);
         }
     }
