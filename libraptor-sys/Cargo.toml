@@ -2,6 +2,7 @@
 name = "libraptor-sys"
 version = "0.1.0"
 authors = ["Phillip Lord <phillip.lord@newcastle.ac.uk>"]
+autobenches=false
 
 [dependencies]
 
@@ -9,3 +10,10 @@ authors = ["Phillip Lord <phillip.lord@newcastle.ac.uk>"]
 [build-dependencies]
 bindgen = "0.42.2"
 pkg-config = "0.3"
+
+[dev-dependencies]
+criterion = "0.2"
+
+[[bench]]
+name="raptor"
+harness = false

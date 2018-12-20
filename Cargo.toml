@@ -11,3 +11,4 @@ authors = ["Phillip Lord <phillip.lord@newcastle.ac.uk>"]
 [dependencies]
 pkg-config = "0.3"
 libraptor-sys = {path="./libraptor-sys/"}
+libc = "0.2"
