@@ -8,8 +8,6 @@ use std::ffi::CString;
 use std::marker::PhantomData;
 use std::fmt::Debug;
 
-fn check_null() {}
-
 pub struct World {
     raw: *mut raptor_world,
 }
@@ -33,7 +31,7 @@ impl Drop for World {
 }
 
 pub trait ParserHandler: Debug{
-    fn handle_statement(&mut self, String) -> Result<(),String>;
+    fn handle_statement(&mut self, Statement) -> Result<(),String>;
     fn handle_error(&self, String) -> Result<(),String>;
 }
 
@@ -42,7 +40,7 @@ pub struct EmptyParserHandler{
 }
 
 impl ParserHandler for EmptyParserHandler{
-    fn handle_statement(&mut self, _:String) -> Result<(),String>
+    fn handle_statement(&mut self, _statement:Statement) -> Result<(),String>
     {
         Ok(())
     }
@@ -53,14 +51,34 @@ impl ParserHandler for EmptyParserHandler{
     }
 }
 
-pub struct Parser<'w>
+pub struct Statement
 {
-    pub raw: *mut raptor_parser,
-    pub marker: PhantomData<&'w World>,
-    handler_ptr: *mut c_void
+    subject: Term,
+    predicate: Term,
+    object: Term,
+    graph: Option<Term>
 }
 
+pub struct Literal {
+    value:String,
+    datatype:IRI,
+    lang:String,
+}
 
+pub struct IRI(String);
+
+pub enum Term {
+    URI(String),
+    Literal(Literal),
+    Blank(String)
+}
+
+pub struct Parser<'w>
+{
+    raw: *mut raptor_parser,
+    marker: PhantomData<&'w World>,
+    handler_ptr: *mut c_void
+}
 
 fn term_to_rust_string(term:*mut raptor_term) -> String {
     unsafe{
@@ -71,13 +89,45 @@ fn term_to_rust_string(term:*mut raptor_term) -> String {
     }
 }
 
+fn raptor_statement_to_rust_statement(statement:*mut raptor_statement) -> Statement
+{
+    unsafe{
+        Statement{
+            subject: raptor_term_to_rust_term((*statement).subject),
+            predicate: raptor_term_to_rust_term((*statement).predicate),
+            object: raptor_term_to_rust_term((*statement).object),
+            graph: raptor_term_to_rust_term_maybe((*statement).graph)
+        }
+    }
+}
+
+fn raptor_uri_to_rust_iri(uri:*mut raptor_uri) -> IRI
+{
+    unsafe {
+        IRI(CString::from_raw(raptor_uri_to_string(uri) as *mut i8).
+            into_string().unwrap())
+    }
+}
+
+fn raptor_term_to_rust_term(_term:*mut raptor_term) -> Term
+{
+    unimplemented!();
+}
+
+fn raptor_term_to_rust_term_maybe(_term:*mut raptor_term)->Option<Term>
+{
+    unimplemented!();
+}
+
 extern "C" fn statement_handler(user_data:*mut c_void,
                                 statement: *mut raptor_statement)
 {
     unsafe{
-        let ph:&mut Box<ParserHandler> = mem::transmute(user_data);
-        ph.handle_statement("hello".to_string()).ok();
+        let rust_statement =
+            raptor_statement_to_rust_statement(statement);
 
+        let ph:&mut Box<ParserHandler> = mem::transmute(user_data);
+        ph.handle_statement(rust_statement).ok();
     }
 }
 
@@ -173,6 +223,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_parse() {
         let about = include_str!("./test-files/about.rdf");
         let mut w = World::new();
@@ -184,6 +235,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_two_parse() {
         let about = include_str!("./test-files/about_two.rdf");
         let mut w = World::new();
@@ -199,4 +251,16 @@ mod tests {
         let _e = EmptyParserHandler::default();
     }
 
+    #[test]
+    fn test_convert_uri() -> Result<(),std::ffi::NulError> {
+        unsafe{
+            let w = raptor_new_world();
+            let uri_string:CString = CString::new("http://www.example.com")?;
+            let uri = raptor_new_uri(w, uri_string.as_ptr() as *const u8);
+            let rust_uri = raptor_uri_to_rust_iri(uri);
+
+            assert_eq!(rust_uri.0, "http://www.example.com");
+            Ok(())
+        }
+    }
 }
