@@ -1,6 +1,7 @@
 extern crate libraptor_sys;
 
 use libraptor_sys::*;
+use std::collections::VecDeque;
 use std::mem;
 use std::os::raw::c_void;
 use std::ffi::CStr;
@@ -32,7 +33,7 @@ impl Drop for World {
 
 pub trait ParserHandler: Debug{
     fn handle_statement(&mut self, Statement) -> Result<(),String>;
-    fn handle_error(&self, String) -> Result<(),String>;
+    fn handle_error(&mut self, String) -> Result<(),String>;
 }
 
 #[derive(Copy, Clone, Debug, Default)]
@@ -40,17 +41,43 @@ pub struct EmptyParserHandler{
 }
 
 impl ParserHandler for EmptyParserHandler{
+    // Do these methods really need to return Result? Is there
+    // anything we can do?
     fn handle_statement(&mut self, _statement:Statement) -> Result<(),String>
     {
         Ok(())
     }
 
-    fn handle_error(&self, _:String) -> Result<(),String>
+    fn handle_error(&mut self, _:String) -> Result<(),String>
     {
         Ok(())
     }
 }
 
+#[derive(Debug)]
+pub struct MemoryParserHandler(pub VecDeque<Result<Statement,String>>);
+
+impl MemoryParserHandler {
+    pub fn new() -> MemoryParserHandler {
+        MemoryParserHandler(VecDeque::new())
+    }
+}
+
+impl ParserHandler for MemoryParserHandler {
+    fn handle_statement(&mut self, statement:Statement) -> Result<(),String>
+    {
+        self.0.push_back(Ok(statement));
+        Ok(())
+    }
+
+    fn handle_error(&mut self, error:String) -> Result<(),String>
+    {
+        self.0.push_back(Err(error));
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
 pub struct Statement
 {
     subject: Term,
@@ -59,14 +86,17 @@ pub struct Statement
     graph: Option<Term>
 }
 
+#[derive(Debug)]
 pub struct Literal {
     value:String,
     datatype:IRI,
     lang:String,
 }
 
+#[derive(Clone, Debug)]
 pub struct IRI(String);
 
+#[derive(Debug)]
 pub enum Term {
     URI(String),
     Literal(Literal),
