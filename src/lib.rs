@@ -194,8 +194,7 @@ fn raptor_literal_to_rust_literal(literal: raptor_term_literal_value) -> Literal
                     None
                 }
                 else {
-                    Some(IRI(CString::from_raw(literal.datatype as *mut i8).
-                             into_string().unwrap()))
+                    Some(raptor_uri_to_rust_iri(literal.datatype))
                 }
             },
             lang: {
@@ -403,7 +402,7 @@ mod tests {
             if path.starts_with("error-") {
                 assert!(
                     true
-                    format!("{} should NOT 1parse without error", path)
+                    format!("{} should NOT parse without error", path)
                 );
             } else {
                 assert!(true, format!("{} should parse without error", path));
