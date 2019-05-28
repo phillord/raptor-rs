@@ -89,8 +89,8 @@ pub struct Statement
 #[derive(Debug)]
 pub struct Literal {
     value:String,
-    datatype:IRI,
-    lang:String,
+    datatype:Option<IRI>,
+    lang:Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -98,7 +98,7 @@ pub struct IRI(String);
 
 #[derive(Debug)]
 pub enum Term {
-    URI(String),
+    URI(IRI),
     Literal(Literal),
     Blank(String)
 }
@@ -139,14 +139,78 @@ fn raptor_uri_to_rust_iri(uri:*mut raptor_uri) -> IRI
     }
 }
 
-fn raptor_term_to_rust_term(_term:*mut raptor_term) -> Term
+#[allow(non_upper_case_globals)]
+fn raptor_term_to_rust_term(term:*mut raptor_term) -> Term
 {
-    unimplemented!();
+    unsafe {
+        match (*term).type_ {
+            raptor_term_type_RAPTOR_TERM_TYPE_UNKNOWN => {
+                panic!("Found raptor term with TERM_TYPE_UNKNOWN")
+            }
+            raptor_term_type_RAPTOR_TERM_TYPE_URI => {
+                Term::URI(raptor_uri_to_rust_iri((*term).value.uri))
+            }
+            raptor_term_type_RAPTOR_TERM_TYPE_LITERAL => {
+                Term::Literal(raptor_literal_to_rust_literal((*term).value.literal))
+            }
+            raptor_term_type_RAPTOR_TERM_TYPE_BLANK => {
+                Term::Blank(
+                    std::str::from_utf8(std::slice::from_raw_parts
+                                        ((*term).value.blank.string,
+                                         (*term).value.blank.string_len as usize))
+                        .unwrap()
+                        .to_string()
+                )
+            }
+            _ => {
+                panic!("Found raptor term with unknown term type");
+            }
+        }
+    }
 }
 
-fn raptor_term_to_rust_term_maybe(_term:*mut raptor_term)->Option<Term>
+fn raptor_term_to_rust_term_maybe(term:*mut raptor_term)->Option<Term>
 {
-    unimplemented!();
+    if term.is_null() {
+        None
+    }
+    else {
+        Some(raptor_term_to_rust_term(term))
+    }
+}
+
+fn raptor_literal_to_rust_literal(literal: raptor_term_literal_value) -> Literal
+{
+    unsafe {
+        Literal{
+            value: {
+                std::str::from_utf8(std::slice::from_raw_parts
+                                    (literal.string, literal.string_len as usize))
+                    .unwrap()
+                    .to_string()
+            },
+            datatype: {
+                if literal.datatype.is_null() {
+                    None
+                }
+                else {
+                    Some(IRI(CString::from_raw(literal.datatype as *mut i8).
+                             into_string().unwrap()))
+                }
+            },
+            lang: {
+                if literal.language.is_null() {
+                    None
+                }
+                else {
+                    Some(std::str::from_utf8(std::slice::from_raw_parts
+                                             (literal.language, literal.language_len as usize))
+                         .unwrap()
+                         .to_string())
+                }
+            }
+        }
+    }
 }
 
 extern "C" fn statement_handler(user_data:*mut c_void,
@@ -156,14 +220,14 @@ extern "C" fn statement_handler(user_data:*mut c_void,
         let rust_statement =
             raptor_statement_to_rust_statement(statement);
 
-        let ph:&mut Box<ParserHandler> = mem::transmute(user_data);
+        let ph:&mut Box<&mut ParserHandler> = mem::transmute(user_data);
         ph.handle_statement(rust_statement).ok();
     }
 }
 
 impl<'w> Parser<'w>{
     pub fn new(w: &mut World, kind: &str, baseuri: &str,
-               handler: Box<ParserHandler>,
+               handler: &ParserHandler,
     ) -> Parser<'w> {
 
         let kind = CString::new(kind).unwrap();
@@ -173,7 +237,7 @@ impl<'w> Parser<'w>{
             let baseuri =
                 raptor_new_uri(w.raw, baseuri.as_ptr() as *const u8);
 
-            let double_boxed_handler: Box<Box<ParserHandler>> = Box::new(handler);
+            let double_boxed_handler: Box<Box<&ParserHandler>> = Box::new(Box::new(handler));
             let handler_ptr = Box::into_raw(double_boxed_handler) as *mut _;
             let parser =
                 Parser {
@@ -213,7 +277,7 @@ impl<'w> Drop for Parser<'w>
         unsafe {
             raptor_free_parser(self.raw);
             // Drop the handler
-            let _: Box<Box<ParserHandler>> = Box::from_raw(self.handler_ptr as *mut _);
+            let _: Box<Box<&ParserHandler>> = Box::from_raw(self.handler_ptr as *mut _);
         }
     }
 }
@@ -221,6 +285,11 @@ impl<'w> Drop for Parser<'w>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::io::Error;
+    use std::ffi::OsStr;
+    use std::path::Path;
+    use std::fs::{read_dir};
 
     #[test]
     fn raw_new_free_world() {
@@ -239,39 +308,44 @@ mod tests {
     fn new_parser() {
         let mut w = World::new();
         let e = EmptyParserHandler::default();
-        let _p = Parser::new(&mut w, "rdfxml", "http://www.example.com",
-                             Box::new(e));
+        let _p = Parser::new(&mut w, "rdfxml", "http://www.example.com", &e);
     }
 
     #[test]
     fn test_empty_parse() {
         let mut w = World::new();
-        let e = EmptyParserHandler::default();
-        let mut p = Parser::new(&mut w, "rdfxml", "http://www.example.com",
-                                Box::new(e));
+        let m = MemoryParserHandler::new();
+        let mut p = Parser::new(&mut w, "rdfxml", "http://www.example.com", &m);
         p.parse_complete();
+        assert_eq!(0, m.0.len());
     }
 
     #[test]
-    #[ignore]
     fn test_parse() {
         let about = include_str!("./test-files/about.rdf");
         let mut w = World::new();
-        let e = EmptyParserHandler::default();
-        let mut p = Parser::new(&mut w, "rdfxml", "http://www.example.com",
-                                Box::new(e));
+        let m = MemoryParserHandler::new();
+        let mut p = Parser::new(&mut w, "rdfxml", "http://www.example.com", &m);
         p.parse_chunk(about);
         p.parse_complete();
     }
 
     #[test]
-    #[ignore]
+    fn test_parse_with_lang() {
+        let about = include_str!("./test-files/about_with_lang.rdf");
+        let mut w = World::new();
+        let m = MemoryParserHandler::new();
+        let mut p = Parser::new(&mut w, "rdfxml", "http://www.example.com", &m);
+        p.parse_chunk(about);
+        p.parse_complete();
+    }
+
+    #[test]
     fn test_two_parse() {
         let about = include_str!("./test-files/about_two.rdf");
         let mut w = World::new();
         let e = EmptyParserHandler::default();
-        let mut p = Parser::new(&mut w, "rdfxml", "http://www.example.com",
-                                Box::new(e));
+        let mut p = Parser::new(&mut w, "rdfxml", "http://www.example.com", &e);
         p.parse_chunk(about);
         p.parse_complete();
     }
@@ -292,5 +366,54 @@ mod tests {
             assert_eq!(rust_uri.0, "http://www.example.com");
             Ok(())
         }
+    }
+
+    #[test]
+    fn w3c_test_suite() -> Result<(),Error> {
+        // TODO Rewrite this out of copyright
+
+        let rdf_ext = Some(OsStr::new("rdf"));
+        let suite = Path::new("./").join("rdf-tests").join("rdf-xml");
+        if !suite.exists() || !suite.is_dir() {
+            panic!("rdf-tests/rdf-xml not found");
+        }
+
+        let test_files =
+            read_dir(&suite).unwrap()
+            .map(|subfile| subfile.ok().unwrap().path())
+            .filter(|p| p.is_dir())
+            .flat_map(|subdir| read_dir(subdir).unwrap())
+            .map(|entry| entry.ok().unwrap().path())
+            .filter(|path| path.extension() == rdf_ext);
+
+        let mut count = 0;
+        for path in test_files {
+
+            let st = fs::read_to_string(path.clone())?;
+
+            let mut w = World::new();
+            let m = MemoryParserHandler::new();
+            let mut p = Parser::new(&mut w, "rdfxml", "http://www.example.com", &m);
+            p.parse_chunk(&st);
+            p.parse_complete();
+
+            count=count+1;
+
+            let path = path.to_str().unwrap();
+            if path.starts_with("error-") {
+                assert!(
+                    true
+                    format!("{} should NOT 1parse without error", path)
+                );
+            } else {
+                assert!(true, format!("{} should parse without error", path));
+            }
+        }
+        assert_ne!(
+            count, 0,
+            "No test found in W3C test-suite, something must be wrong"
+        );
+
+        Ok(())
     }
 }
