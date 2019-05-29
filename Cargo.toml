@@ -6,9 +6,11 @@ members = [
 [package]
 name = "raptor-rs"
 version = "0.1.0"
-authors = ["Phillip Lord <phillip.lord@newcastle.ac.uk>"]
+authors = ["Phillip Lord <phillip.lord@russet.org.uk>"]
 
 [dependencies]
+clap = "2.31.2"
+failure = "0.1.2"
 pkg-config = "0.3"
 libraptor-sys = {path="./libraptor-sys/"}
 libc = "0.2"
