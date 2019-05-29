@@ -9,27 +9,6 @@ use std::mem;
 use std::os::raw::c_char;
 use std::os::raw::c_void;
 
-struct World {
-    raw: *mut raptor_world,
-}
-
-impl World {
-    fn new() -> World {
-        unsafe {
-            let raw = raptor_new_world();
-            World { raw }
-        }
-    }
-}
-
-impl Drop for World {
-    fn drop(&mut self) {
-        unsafe {
-            raptor_free_world(self.raw);
-        }
-    }
-}
-
 pub trait ParserHandler: Debug {
     fn handle_statement(&mut self, Statement) -> Result<(), String>;
     fn handle_error(&mut self, LogMessage) -> Result<(), String>;
@@ -67,7 +46,6 @@ impl ParserHandler for MemoryParserHandler {
 
     fn handle_error(&mut self, error: LogMessage) -> Result<(), String> {
         self.0.push_back(Err(error));
-        dbg!(self);
         Ok(())
     }
 }
@@ -145,6 +123,15 @@ fn raptor_string_to_rust_string(s: *const c_char) -> String {
     }
 }
 
+fn raptor_string_to_rust_string_maybe(s: *const c_char) -> Option<String> {
+    if s.is_null() {
+        None
+    } else {
+        Some(raptor_string_to_rust_string(s))
+    }
+}
+
+#[allow(dead_code)]
 fn raptor_locator_to_rust_locator(locator: *mut raptor_locator) -> Locator {
     unsafe {
         Locator {
@@ -153,15 +140,7 @@ fn raptor_locator_to_rust_locator(locator: *mut raptor_locator) -> Locator {
             } else {
                 Some(raptor_uri_to_rust_iri((*locator).uri))
             },
-            file: if (*locator).file.is_null() {
-                None
-            } else {
-                Some(
-                    CString::from_raw((*locator).file as *mut i8)
-                        .into_string()
-                        .unwrap(),
-                )
-            },
+            file: raptor_string_to_rust_string_maybe((*locator).file),
             line: if (*locator).line < 0 {
                 None
             } else {
@@ -381,11 +360,6 @@ mod tests {
     }
 
     #[test]
-    fn new_world() {
-        World::new();
-    }
-
-    #[test]
     fn new_parser() {
         let e = EmptyParserHandler::default();
         let _p = Parser::new("rdfxml", "http://www.example.com", &e);
@@ -397,7 +371,8 @@ mod tests {
         let mut p = Parser::new("rdfxml", "http://www.example.com", &m);
         p.parse_complete();
 
-        assert_eq!(0, dbg!(m).0.len());
+        // one error!
+        assert_eq!(1, m.0.len());
     }
 
     #[test]
@@ -468,7 +443,7 @@ mod tests {
 
         let mut count = 0;
         for path in test_files {
-            let st = fs::read_to_string(dbg!(path.clone()))?;
+            let st = fs::read_to_string(path.clone())?;
 
             let m = MemoryParserHandler::new();
             let mut p = Parser::new("rdfxml", "http://www.example.com", &m);
