@@ -2,23 +2,22 @@ extern crate libraptor_sys;
 
 use libraptor_sys::*;
 use std::collections::VecDeque;
-use std::mem;
-use std::os::raw::c_void;
 use std::ffi::CStr;
 use std::ffi::CString;
-use std::marker::PhantomData;
 use std::fmt::Debug;
+use std::mem;
+use std::os::raw::c_char;
+use std::os::raw::c_void;
 
-pub struct World {
+struct World {
     raw: *mut raptor_world,
 }
 
 impl World {
-    pub fn new() -> World {
+    fn new() -> World {
         unsafe {
-            World {
-                raw: raptor_new_world(),
-            }
+            let raw = raptor_new_world();
+            World { raw }
         }
     }
 }
@@ -31,31 +30,28 @@ impl Drop for World {
     }
 }
 
-pub trait ParserHandler: Debug{
-    fn handle_statement(&mut self, Statement) -> Result<(),String>;
-    fn handle_error(&mut self, String) -> Result<(),String>;
+pub trait ParserHandler: Debug {
+    fn handle_statement(&mut self, Statement) -> Result<(), String>;
+    fn handle_error(&mut self, LogMessage) -> Result<(), String>;
 }
 
 #[derive(Copy, Clone, Debug, Default)]
-pub struct EmptyParserHandler{
-}
+pub struct EmptyParserHandler {}
 
-impl ParserHandler for EmptyParserHandler{
+impl ParserHandler for EmptyParserHandler {
     // Do these methods really need to return Result? Is there
     // anything we can do?
-    fn handle_statement(&mut self, _statement:Statement) -> Result<(),String>
-    {
+    fn handle_statement(&mut self, _statement: Statement) -> Result<(), String> {
         Ok(())
     }
 
-    fn handle_error(&mut self, _:String) -> Result<(),String>
-    {
+    fn handle_error(&mut self, _: LogMessage) -> Result<(), String> {
         Ok(())
     }
 }
 
 #[derive(Debug)]
-pub struct MemoryParserHandler(pub VecDeque<Result<Statement,String>>);
+pub struct MemoryParserHandler(pub VecDeque<Result<Statement, LogMessage>>);
 
 impl MemoryParserHandler {
     pub fn new() -> MemoryParserHandler {
@@ -64,33 +60,31 @@ impl MemoryParserHandler {
 }
 
 impl ParserHandler for MemoryParserHandler {
-    fn handle_statement(&mut self, statement:Statement) -> Result<(),String>
-    {
+    fn handle_statement(&mut self, statement: Statement) -> Result<(), String> {
         self.0.push_back(Ok(statement));
         Ok(())
     }
 
-    fn handle_error(&mut self, error:String) -> Result<(),String>
-    {
+    fn handle_error(&mut self, error: LogMessage) -> Result<(), String> {
         self.0.push_back(Err(error));
+        dbg!(self);
         Ok(())
     }
 }
 
 #[derive(Debug)]
-pub struct Statement
-{
+pub struct Statement {
     subject: Term,
     predicate: Term,
     object: Term,
-    graph: Option<Term>
+    graph: Option<Term>,
 }
 
 #[derive(Debug)]
 pub struct Literal {
-    value:String,
-    datatype:Option<IRI>,
-    lang:Option<String>,
+    value: String,
+    datatype: Option<IRI>,
+    lang: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -100,48 +94,133 @@ pub struct IRI(String);
 pub enum Term {
     URI(IRI),
     Literal(Literal),
-    Blank(String)
+    Blank(String),
 }
 
-pub struct Parser<'w>
-{
+#[derive(Debug)]
+pub enum LogLevel {
+    None,
+    Trace,
+    Debug,
+    Info,
+    Warn,
+    Error,
+    Fatal,
+}
+
+#[derive(Debug)]
+pub struct Locator {
+    iri: Option<IRI>,
+    file: Option<String>,
+    line: Option<i32>,
+    column: Option<i32>,
+    byte: Option<i32>,
+}
+
+#[derive(Debug)]
+pub struct LogMessage {
+    text: String,
+    level: LogLevel,
+}
+
+pub struct Parser {
     raw: *mut raptor_parser,
-    marker: PhantomData<&'w World>,
-    handler_ptr: *mut c_void
+    raw_world: *mut raptor_world,
 }
 
-fn term_to_rust_string(term:*mut raptor_term) -> String {
-    unsafe{
-        let cstring:CString =
-            CString::from_raw(raptor_term_to_string(term) as *mut i8);
+// libraptor strings are not normal strings -- they are Unicode
+// strings null-terminated. In most cases, it's clear which one we are
+// using -- either unicode buffer with a len, or a "proper" C
+// string. However, some places mix the two. This method hopefully
+// works.
+fn raptor_string_to_rust_string(s: *const c_char) -> String {
+    unsafe {
+        // Count up to the null terminator
+        let len = libc::strlen(s);
 
-        return cstring.into_string().unwrap();
+        // Convert from utf8
+        std::str::from_utf8(std::slice::from_raw_parts(s as *mut u8, len as usize))
+            .unwrap()
+            .to_string()
     }
 }
 
-fn raptor_statement_to_rust_statement(statement:*mut raptor_statement) -> Statement
-{
-    unsafe{
-        Statement{
-            subject: raptor_term_to_rust_term((*statement).subject),
-            predicate: raptor_term_to_rust_term((*statement).predicate),
-            object: raptor_term_to_rust_term((*statement).object),
-            graph: raptor_term_to_rust_term_maybe((*statement).graph)
+fn raptor_locator_to_rust_locator(locator: *mut raptor_locator) -> Locator {
+    unsafe {
+        Locator {
+            iri: if (*locator).uri.is_null() {
+                None
+            } else {
+                Some(raptor_uri_to_rust_iri((*locator).uri))
+            },
+            file: if (*locator).file.is_null() {
+                None
+            } else {
+                Some(
+                    CString::from_raw((*locator).file as *mut i8)
+                        .into_string()
+                        .unwrap(),
+                )
+            },
+            line: if (*locator).line < 0 {
+                None
+            } else {
+                Some((*locator).line)
+            },
+            column: if (*locator).column < 0 {
+                None
+            } else {
+                Some((*locator).column)
+            },
+            byte: if (*locator).byte < 0 {
+                None
+            } else {
+                Some((*locator).byte)
+            },
         }
     }
 }
 
-fn raptor_uri_to_rust_iri(uri:*mut raptor_uri) -> IRI
-{
+#[allow(non_upper_case_globals)]
+fn raptor_log_message_to_rust_log_message(message: *mut raptor_log_message) -> LogMessage {
     unsafe {
-        IRI(CString::from_raw(raptor_uri_to_string(uri) as *mut i8).
-            into_string().unwrap())
+        LogMessage {
+            text: raptor_string_to_rust_string((*message).text),
+            level: match (*message).level {
+                raptor_log_level_RAPTOR_LOG_LEVEL_NONE => LogLevel::None,
+                raptor_log_level_RAPTOR_LOG_LEVEL_TRACE => LogLevel::Trace,
+                raptor_log_level_RAPTOR_LOG_LEVEL_DEBUG => LogLevel::Debug,
+                raptor_log_level_RAPTOR_LOG_LEVEL_INFO => LogLevel::Info,
+                raptor_log_level_RAPTOR_LOG_LEVEL_WARN => LogLevel::Warn,
+                raptor_log_level_RAPTOR_LOG_LEVEL_ERROR => LogLevel::Error,
+                raptor_log_level_RAPTOR_LOG_LEVEL_FATAL => LogLevel::Fatal,
+                _ => panic!("Unknown log level"),
+            },
+        }
+    }
+}
+
+fn raptor_statement_to_rust_statement(statement: *mut raptor_statement) -> Statement {
+    unsafe {
+        Statement {
+            subject: raptor_term_to_rust_term((*statement).subject),
+            predicate: raptor_term_to_rust_term((*statement).predicate),
+            object: raptor_term_to_rust_term((*statement).object),
+            graph: raptor_term_to_rust_term_maybe((*statement).graph),
+        }
+    }
+}
+
+fn raptor_uri_to_rust_iri(uri: *mut raptor_uri) -> IRI {
+    unsafe {
+        IRI(CString::from_raw(raptor_uri_to_string(uri) as *mut i8)
+            .into_string()
+            .unwrap())
     }
 }
 
 #[allow(non_upper_case_globals)]
-fn raptor_term_to_rust_term(term:*mut raptor_term) -> Term
-{
+fn raptor_term_to_rust_term(term: *mut raptor_term) -> Term {
     unsafe {
         match (*term).type_ {
             raptor_term_type_RAPTOR_TERM_TYPE_UNKNOWN => {
@@ -153,15 +232,14 @@ fn raptor_term_to_rust_term(term:*mut raptor_term) -> Term
             raptor_term_type_RAPTOR_TERM_TYPE_LITERAL => {
                 Term::Literal(raptor_literal_to_rust_literal((*term).value.literal))
             }
-            raptor_term_type_RAPTOR_TERM_TYPE_BLANK => {
-                Term::Blank(
-                    std::str::from_utf8(std::slice::from_raw_parts
-                                        ((*term).value.blank.string,
-                                         (*term).value.blank.string_len as usize))
-                        .unwrap()
-                        .to_string()
-                )
-            }
+            raptor_term_type_RAPTOR_TERM_TYPE_BLANK => Term::Blank(
+                std::str::from_utf8(std::slice::from_raw_parts(
+                    (*term).value.blank.string,
+                    (*term).value.blank.string_len as usize,
+                ))
+                .unwrap()
+                .to_string(),
+            ),
             _ => {
                 panic!("Found raptor term with unknown term type");
             }
@@ -169,92 +247,98 @@ fn raptor_term_to_rust_term(term:*mut raptor_term) -> Term
     }
 }
 
-fn raptor_term_to_rust_term_maybe(term:*mut raptor_term)->Option<Term>
-{
+fn raptor_term_to_rust_term_maybe(term: *mut raptor_term) -> Option<Term> {
     if term.is_null() {
         None
-    }
-    else {
+    } else {
         Some(raptor_term_to_rust_term(term))
     }
 }
 
-fn raptor_literal_to_rust_literal(literal: raptor_term_literal_value) -> Literal
-{
+fn raptor_literal_to_rust_literal(literal: raptor_term_literal_value) -> Literal {
     unsafe {
-        Literal{
+        Literal {
             value: {
-                std::str::from_utf8(std::slice::from_raw_parts
-                                    (literal.string, literal.string_len as usize))
-                    .unwrap()
-                    .to_string()
+                std::str::from_utf8(std::slice::from_raw_parts(
+                    literal.string,
+                    literal.string_len as usize,
+                ))
+                .unwrap()
+                .to_string()
             },
             datatype: {
                 if literal.datatype.is_null() {
                     None
-                }
-                else {
+                } else {
                     Some(raptor_uri_to_rust_iri(literal.datatype))
                 }
             },
             lang: {
                 if literal.language.is_null() {
                     None
+                } else {
+                    Some(
+                        std::str::from_utf8(std::slice::from_raw_parts(
+                            literal.language,
+                            literal.language_len as usize,
+                        ))
+                        .unwrap()
+                        .to_string(),
+                    )
                 }
-                else {
-                    Some(std::str::from_utf8(std::slice::from_raw_parts
-                                             (literal.language, literal.language_len as usize))
-                         .unwrap()
-                         .to_string())
-                }
-            }
+            },
         }
     }
 }
 
-extern "C" fn statement_handler(user_data:*mut c_void,
-                                statement: *mut raptor_statement)
-{
-    unsafe{
-        let rust_statement =
-            raptor_statement_to_rust_statement(statement);
+extern "C" fn log_handler(user_data: *mut c_void, message: *mut raptor_log_message) {
+    unsafe {
+        let ph: &mut Box<&mut ParserHandler> = mem::transmute(user_data);
+        let rust_log_message = raptor_log_message_to_rust_log_message(message);
+        ph.handle_error(rust_log_message).ok();
+    }
+}
 
-        let ph:&mut Box<&mut ParserHandler> = mem::transmute(user_data);
+extern "C" fn statement_handler(user_data: *mut c_void, statement: *mut raptor_statement) {
+    unsafe {
+        let rust_statement = raptor_statement_to_rust_statement(statement);
+
+        let ph: &mut Box<&mut ParserHandler> = mem::transmute(user_data);
         ph.handle_statement(rust_statement).ok();
     }
 }
 
-impl<'w> Parser<'w>{
-    pub fn new(w: &mut World, kind: &str, baseuri: &str,
-               handler: &ParserHandler,
-    ) -> Parser<'w> {
-
+impl<'w> Parser {
+    pub fn new(kind: &str, baseuri: &str, handler: &ParserHandler) -> Parser {
         let kind = CString::new(kind).unwrap();
         let baseuri = CString::new(baseuri).unwrap();
 
         unsafe {
-            let baseuri =
-                raptor_new_uri(w.raw, baseuri.as_ptr() as *const u8);
+            let world = raptor_new_world();
+
+            let baseuri = raptor_new_uri(world, baseuri.as_ptr() as *const u8);
 
             let double_boxed_handler: Box<Box<&ParserHandler>> = Box::new(Box::new(handler));
             let handler_ptr = Box::into_raw(double_boxed_handler) as *mut _;
-            let parser =
-                Parser {
-                    raw: raptor_new_parser(w.raw, kind.as_ptr()),
-                    marker: PhantomData,
-                    handler_ptr
-                };
 
-            raptor_parser_set_statement_handler(parser.raw,
-                                                handler_ptr,
-                                                Some(statement_handler));
+            let parser = Parser {
+                raw: raptor_new_parser(world, kind.as_ptr()),
+                raw_world: world,
+            };
+
+            raptor_world_set_log_handler(parser.raw_world, handler_ptr, Some(log_handler));
+
+            raptor_parser_set_statement_handler(parser.raw, handler_ptr, Some(statement_handler));
+
             raptor_parser_parse_start(parser.raw, baseuri);
             parser
         }
     }
 
     fn parse_cstr(&mut self, content: &CStr, size: usize) {
-        unsafe { raptor_parser_parse_chunk(self.raw, content.as_ptr() as *const u8, size, 0); }
+        unsafe {
+            raptor_parser_parse_chunk(self.raw, content.as_ptr() as *const u8, size, 0);
+        }
     }
 
     pub fn parse_chunk(&mut self, content: &str) {
@@ -264,19 +348,17 @@ impl<'w> Parser<'w>{
     }
 
     pub fn parse_complete(&mut self) {
-        unsafe{
-            raptor_parser_parse_chunk(self.raw,std::ptr::null(), 0, 1);
+        unsafe {
+            raptor_parser_parse_chunk(self.raw, std::ptr::null(), 0, 1);
         }
     }
 }
 
-impl<'w> Drop for Parser<'w>
-{
+impl<'w> Drop for Parser {
     fn drop(&mut self) {
         unsafe {
             raptor_free_parser(self.raw);
-            // Drop the handler
-            let _: Box<Box<&ParserHandler>> = Box::from_raw(self.handler_ptr as *mut _);
+            raptor_free_world(self.raw_world);
         }
     }
 }
@@ -284,11 +366,11 @@ impl<'w> Drop for Parser<'w>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
-    use std::io::Error;
     use std::ffi::OsStr;
+    use std::fs;
+    use std::fs::read_dir;
+    use std::io::Error;
     use std::path::Path;
-    use std::fs::{read_dir};
 
     #[test]
     fn raw_new_free_world() {
@@ -305,26 +387,24 @@ mod tests {
 
     #[test]
     fn new_parser() {
-        let mut w = World::new();
         let e = EmptyParserHandler::default();
-        let _p = Parser::new(&mut w, "rdfxml", "http://www.example.com", &e);
+        let _p = Parser::new("rdfxml", "http://www.example.com", &e);
     }
 
     #[test]
     fn test_empty_parse() {
-        let mut w = World::new();
         let m = MemoryParserHandler::new();
-        let mut p = Parser::new(&mut w, "rdfxml", "http://www.example.com", &m);
+        let mut p = Parser::new("rdfxml", "http://www.example.com", &m);
         p.parse_complete();
-        assert_eq!(0, m.0.len());
+
+        assert_eq!(0, dbg!(m).0.len());
     }
 
     #[test]
     fn test_parse() {
         let about = include_str!("./test-files/about.rdf");
-        let mut w = World::new();
         let m = MemoryParserHandler::new();
-        let mut p = Parser::new(&mut w, "rdfxml", "http://www.example.com", &m);
+        let mut p = Parser::new("rdfxml", "http://www.example.com", &m);
         p.parse_chunk(about);
         p.parse_complete();
     }
@@ -332,9 +412,8 @@ mod tests {
     #[test]
     fn test_parse_with_lang() {
         let about = include_str!("./test-files/about_with_lang.rdf");
-        let mut w = World::new();
         let m = MemoryParserHandler::new();
-        let mut p = Parser::new(&mut w, "rdfxml", "http://www.example.com", &m);
+        let mut p = Parser::new("rdfxml", "http://www.example.com", &m);
         p.parse_chunk(about);
         p.parse_complete();
     }
@@ -342,9 +421,8 @@ mod tests {
     #[test]
     fn test_two_parse() {
         let about = include_str!("./test-files/about_two.rdf");
-        let mut w = World::new();
         let e = EmptyParserHandler::default();
-        let mut p = Parser::new(&mut w, "rdfxml", "http://www.example.com", &e);
+        let mut p = Parser::new("rdfxml", "http://www.example.com", &e);
         p.parse_chunk(about);
         p.parse_complete();
     }
@@ -355,20 +433,23 @@ mod tests {
     }
 
     #[test]
-    fn test_convert_uri() -> Result<(),std::ffi::NulError> {
-        unsafe{
+    fn test_convert_uri() -> Result<(), std::ffi::NulError> {
+        unsafe {
             let w = raptor_new_world();
-            let uri_string:CString = CString::new("http://www.example.com")?;
+            let uri_string: CString = CString::new("http://www.example.com")?;
             let uri = raptor_new_uri(w, uri_string.as_ptr() as *const u8);
             let rust_uri = raptor_uri_to_rust_iri(uri);
 
             assert_eq!(rust_uri.0, "http://www.example.com");
+
+            raptor_free_uri(uri);
+            raptor_free_world(w);
             Ok(())
         }
     }
 
     #[test]
-    fn w3c_test_suite() -> Result<(),Error> {
+    fn w3c_test_suite() -> Result<(), Error> {
         // TODO Rewrite this out of copyright
 
         let rdf_ext = Some(OsStr::new("rdf"));
@@ -377,8 +458,8 @@ mod tests {
             panic!("rdf-tests/rdf-xml not found");
         }
 
-        let test_files =
-            read_dir(&suite).unwrap()
+        let test_files = read_dir(&suite)
+            .unwrap()
             .map(|subfile| subfile.ok().unwrap().path())
             .filter(|p| p.is_dir())
             .flat_map(|subdir| read_dir(subdir).unwrap())
@@ -387,16 +468,14 @@ mod tests {
 
         let mut count = 0;
         for path in test_files {
+            let st = fs::read_to_string(dbg!(path.clone()))?;
 
-            let st = fs::read_to_string(path.clone())?;
-
-            let mut w = World::new();
             let m = MemoryParserHandler::new();
-            let mut p = Parser::new(&mut w, "rdfxml", "http://www.example.com", &m);
+            let mut p = Parser::new("rdfxml", "http://www.example.com", &m);
             p.parse_chunk(&st);
             p.parse_complete();
 
-            count=count+1;
+            count = count + 1;
 
             let path = path.to_str().unwrap();
             if path.starts_with("error-") {
