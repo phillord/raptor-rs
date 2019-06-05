@@ -452,14 +452,18 @@ mod tests {
 
             count = count + 1;
 
-            let path = path.to_str().unwrap();
-            if path.starts_with("error-") {
+            let path = path.file_name().unwrap().to_str().unwrap();
+
+            if path.starts_with("error") || path.starts_with("warn") {
                 assert!(
-                    true
+                    m.0.iter().any(|event| event.is_err()),
                     format!("{} should NOT parse without error", path)
                 );
             } else {
-                assert!(true, format!("{} should parse without error", path));
+                assert!(
+                    m.0.iter().all(|event| event.is_ok()),
+                    format!("{} should parse without error", path)
+                );
             }
         }
         assert_ne!(
