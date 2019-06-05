@@ -10,7 +10,7 @@ use failure::Error;
 
 use std::fs;
 
-use raptor_rs::*;
+use raptor_rs::push::*;
 
 #[derive(Debug, Fail)]
 pub enum CommandError {
