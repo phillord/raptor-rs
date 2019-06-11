@@ -44,6 +44,6 @@ fn main() -> Result<(), Error> {
     p.parse_chunk(&st);
     p.parse_complete();
 
-    dbg!(m.0);
+    dbg!(&m.0);
     Ok(())
 }

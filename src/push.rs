@@ -45,34 +45,45 @@ impl ParserHandler for MemoryParserHandler {
     }
 }
 
-pub struct Parser {
+pub struct Parser<'w> {
     raw: *mut raptor_parser,
     raw_world: *mut raptor_world,
+    base_uri: *mut raptor_uri,
+    handler_ptr: *mut Box<&'w dyn push::ParserHandler>,
 }
 
-impl<'w> Parser {
-    pub fn new(kind: &str, baseuri: &str, handler: &ParserHandler) -> Parser {
+impl<'w> Parser<'w> {
+    pub fn new(kind: &str, base_uri: &str, handler: &'w ParserHandler) -> Parser<'w> {
         let kind = CString::new(kind).unwrap();
-        let baseuri = CString::new(baseuri).unwrap();
+        let base_uri = CString::new(base_uri).unwrap();
 
         unsafe {
             let world = raptor_new_world();
 
-            let baseuri = raptor_new_uri(world, baseuri.as_ptr() as *const u8);
+            let base_uri = raptor_new_uri(world, base_uri.as_ptr() as *const u8);
 
             let double_boxed_handler: Box<Box<&ParserHandler>> = Box::new(Box::new(handler));
-            let handler_ptr = Box::into_raw(double_boxed_handler) as *mut _;
+            let handler_ptr = Box::into_raw(double_boxed_handler);
 
             let parser = Parser {
                 raw: raptor_new_parser(world, kind.as_ptr()),
                 raw_world: world,
+                base_uri: base_uri,
+                handler_ptr: handler_ptr,
             };
 
-            raptor_world_set_log_handler(parser.raw_world, handler_ptr, Some(log_handler));
+            raptor_world_set_log_handler(
+                parser.raw_world,
+                handler_ptr as *mut _,
+                Some(log_handler),
+            );
 
-            raptor_parser_set_statement_handler(parser.raw, handler_ptr, Some(statement_handler));
-
-            raptor_parser_parse_start(parser.raw, baseuri);
+            raptor_parser_set_statement_handler(
+                parser.raw,
+                handler_ptr as *mut _,
+                Some(statement_handler),
+            );
+            raptor_parser_parse_start(parser.raw, base_uri);
             parser
         }
     }
@@ -96,9 +107,11 @@ impl<'w> Parser {
     }
 }
 
-impl<'w> Drop for Parser {
+impl<'w> Drop for Parser<'w> {
     fn drop(&mut self) {
         unsafe {
+            Box::from_raw(self.handler_ptr);
+            raptor_free_uri(self.base_uri);
             raptor_free_parser(self.raw);
             raptor_free_world(self.raw_world);
         }

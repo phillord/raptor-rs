@@ -4,4 +4,4 @@ install:
   - dpkg -L libraptor2-dev
 script:
   - cargo build --all
-  - cargo test --all
+  - cargo test -- --nocapture

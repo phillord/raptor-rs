@@ -2,12 +2,12 @@ use super::push::Parser as PullParser;
 use super::*;
 use std::io::BufRead;
 
-pub struct Parser {
-    pull: PullParser,
+pub struct Parser<'w> {
+    pull: PullParser<'w>,
 }
 
-impl Parser {
-    pub fn new() -> Parser {
+impl<'w> Parser<'w> {
+    pub fn new() -> Parser<'static> {
         unimplemented!()
     }
 
